@@ -1,145 +1,140 @@
-# Fin_Tracker — Project Map (локальный код)
+# Fin_Tracker — Project Map (актуально на 2026-05-15)
 
-## 1) Снимок
-- Путь: `/Users/boriskov/Documents/folder/Fin_Tracker`
-- Стек: `Python + aiogram 3 + asyncpg + PostgreSQL`
-- Документ отражает текущее локальное состояние репозитория.
+## 1) Snapshot
+- Локальный путь: `/Users/boriskov/Documents/folder/Fin_Tracker`
+- Прод-сервер: `/opt/fin_tracker`
+- Стек: `Python 3.12`, `aiogram 3`, `asyncpg`, `PostgreSQL 16`, `Docker Compose`
 
-## 2) Что это за проект
-Telegram-бот для учета личных финансов с фокусом на:
-- быстрый ввод дохода/расхода через wizard,
-- месячный бюджет (расходы + доходы),
-- bills как отдельный учет регулярных платежей,
-- статистику по периодам,
-- архив закрытых месяцев,
-- выгрузку backup в Telegram и shell-backup скриптом.
+## 2) Назначение проекта
+Telegram-бот для личных финансов с упором на быстрый ввод операций и планирование по месяцам.
+
+Основные блоки:
+- учет `expense` и `income`;
+- бюджет месяца (расходы + доходы);
+- `Bills` как отдельный список регулярных платежей;
+- архив закрытых месяцев;
+- статистика по периодам;
+- резервное копирование через Telegram-команду и shell-скрипт.
 
 ## 3) Корневая структура
-- `docker-compose.yaml`: сервисы `db` (Postgres 16) и `bot`
-- `docker/Dockerfile`: контейнер бота
-- `bot/requirements.txt`: зависимости (`aiogram`, `asyncpg`)
-- `bot/app/main.py`: запуск бота + lifecycle + monthly archive loop
-- `bot/app/config.py`: env-конфиг
-- `bot/app/db/*`: DB pool, SQL loader, named params binder
-- `bot/app/handlers/start.py`: `/start`
-- `bot/app/handlers/health.py`: `/health`
-- `bot/app/handlers/access.py`: whitelist middleware
-- `bot/app/handlers/menu.py`: все reply-кнопки
-- `bot/app/handlers/mvp.py`: основной продуктовый сценарий
-- `queries/*`: SQL по доменным папкам
-- `scripts/create_backup.sh`: резервное копирование проекта + БД
+- `README.md` — краткий гайд запуска под себя.
+- `.gitignore` — исключения для секретов/бэкапов/venv.
+- `docker-compose.yaml` — сервисы `db` + `bot`.
+- `docker/Dockerfile` — образ бота.
+- `bot/requirements.txt` — зависимости.
+- `bot/app/main.py` — lifecycle приложения, polling, monthly archive loop.
+- `bot/app/config.py` — валидация env.
+- `bot/app/db/*` — DB pool, SQL-loader, bind named params.
+- `bot/app/handlers/start.py` — `/start`.
+- `bot/app/handlers/health.py` — `/health`.
+- `bot/app/handlers/access.py` — whitelist middleware.
+- `bot/app/handlers/menu.py` — все reply-кнопки.
+- `bot/app/handlers/mvp.py` — основной продуктовый сценарий.
+- `queries/*` — SQL-слои (`transactions`, `stats`, `budget`, `bills`, `admin`, `migrations`).
+- `scripts/create_backup.sh` — shell backup (dump БД + tar проекта).
 
 ## 4) Runtime-архитектура
-### 4.1 Сервисы
-- `db`: Postgres с healthcheck `pg_isready`
-- `bot`: Python-процесс `python -m app.main`
+### 4.1 Docker сервисы
+- `db`: `postgres:16`, healthcheck `pg_isready`.
+- `bot`: Python-процесс `python -m app.main`.
 
-### 4.2 Startup в `main.py`
-1. Читает env (`load_settings`).
-2. Поднимает `asyncpg` pool (`min=1`, `max=5`).
-3. Загружает все `*.sql` в memory-cache (`dict[path -> text]`).
-4. Выполняет `_archive_closed_months()` один раз на старте.
-5. Стартует фоновой цикл `_monthly_archive_loop()` (проверка каждую минуту).
-6. Запускает polling aiogram.
+### 4.2 Startup (`bot/app/main.py`)
+1. `load_settings()` читает env.
+2. Поднимается `asyncpg` pool (`min_size=1`, `max_size=5`).
+3. SQL-файлы из `QUERIES_DIR` загружаются в in-memory cache.
+4. Один раз вызывается `_archive_closed_months()`.
+5. Стартует фоновой `_monthly_archive_loop()` (тик каждую минуту).
+6. Запускается polling aiogram.
 
 ### 4.3 Shutdown
-- останавливает фоновый monthly task,
-- закрывает db pool.
+- отмена фоновой monthly-задачи;
+- закрытие DB pool.
 
-## 5) Конфигурация (env)
-Обязательные переменные:
+## 5) Конфигурация
+Обязательные env:
 - `TG_TOKEN`
-- `TG_WHITELIST_TG_ID` (int)
+- `TG_WHITELIST_TG_ID`
 - `DATABASE_URL`
 - `QUERIES_DIR`
 
-`.env.example` содержит шаблон для Postgres + Telegram.
+Шаблон переменных: `.env.example`.
 
-## 6) DB модель (`fin` schema)
-### Справочники
+## 6) Модель данных (`fin` schema)
+### 6.1 Справочники
 - `expense_category(code)`
 - `income_category(code)`
 
-### Транзакции
+### 6.2 Транзакции
 - `transactions`
-  - `type`: `expense` / `income` (enum)
-  - `amount > 0`
-  - `occurred_at` (timestamptz)
-  - `expense_category`/`income_category` (взаимоисключающие)
-  - `comment`, `created_at`
+  - `type`: `expense | income`;
+  - `amount > 0`;
+  - `occurred_at` (`timestamptz`);
+  - `expense_category` и `income_category` взаимоисключающие;
+  - `comment`, `created_at`.
 
-### Бюджет
+### 6.3 Бюджет
 - `budget_active(month_id, kind, category_code, amount, updated_at)`
 - `budget_archive(month_id, kind, category_code, amount, archived_at)`
 - `kind`: `expense_limit` или `income_plan`
 
-### Bills
-- `bills(month_id, bill_name, planned_amount, is_active, ...)`
+### 6.4 Bills
+- `bills(month_id, bill_name, planned_amount, is_active, ... )`
 - `bills_archive(month_id, bill_name, planned_amount, archived_at)`
 
-### Логи
-- `parse_error_log` — лог ошибок парсинга пользовательского ввода.
+### 6.5 Технические логи
+- `parse_error_log`.
 
 ## 7) SQL-слои
 ### `queries/20_transactions`
-- insert expense/income
-- последние N операций
-- все операции за месяц
-- проверка возможного дубля
-- проверка даты в будущем
+- insert expense/income;
+- последние `N` операций;
+- все операции месяца;
+- duplicate-check;
+- future-date warning.
 
 ### `queries/30_stats`
-- today/week/month/year/range:
-  - totals (расход/доход/баланс),
-  - top expense categories,
-  - top expense items,
-  - clean income (`income_category <> 'Other'`).
-- `330_stats_year_totals.sql`: корректирует годовой доход, чтобы не удваивать переносы `last month`.
+- totals/top categories/top items/clean income для `today|week|month|year|range`.
+- `330_stats_year_totals.sql` учитывает перенос `last month`, чтобы не удваивать доход между месяцами.
 
 ### `queries/40_budget`
-- чтение/апсерт active-бюджета,
-- автокопия бюджета на новый месяц (`402_budget_autocopy_prev_month.sql`),
-- таблицы текущего месяца (remaining/progress/summary),
-- таблицы архива (history_*),
-- архивирование закрытого месяца (`403`),
-- очистка active после архива (`404`).
+- active budget read/upsert;
+- автокопия предыдущего месяца в новый (`402`);
+- текущие срезы: remaining/progress/summary;
+- архивные срезы: history_*;
+- архивирование закрытого месяца (`403`);
+- очистка active (`404`).
 
 ### `queries/50_bills`
-- статусы bills за месяц и архив,
-- имена bills для picker в расходе,
-- deactivate + upsert bills,
-- очистка bills месяца.
+- статус Bills по месяцу (active/archive);
+- список bill names для picker;
+- deactivate/upsert Bills;
+- очистка Bills месяца.
 
 ### `queries/90_admin`
-- `900_health.sql`
-- QA-запросы сверок по данным.
+- health-check;
+- QA сверочные запросы.
 
-## 8) Telegram-функционал (handlers)
+## 8) Telegram-функционал
+### 8.1 Access
+`WhitelistMiddleware` пускает только `TG_WHITELIST_TG_ID`. Иначе `Access denied`.
 
-## 8.1 Доступ
-`WhitelistMiddleware` (в `access.py`) проверяет `from_user.id`.
-Если не whitelist — `Access denied`.
-
-## 8.2 Start/Health
-- `/start`: приветствие + список команд + `MAIN_MENU`.
-- `/health`: выполняет SQL health-check (или fallback `SELECT 1`) и пишет `DB OK/FAIL`.
-
-## 8.3 Меню (`menu.py`)
-Главное меню:
+### 8.2 Главное меню
 - `💰 Income`
 - `💸 Expense`
 - `🗓️ Planning`
 - `🧾 Budget`
 - `🕘 Recent operations`
 
-Planning меню:
+### 8.3 Planning меню
 - `📝 Bills`
 - `🔄 All`
 - `💰 Income`
 - `💸 Expenses`
 - `⬅ Back`
 
-Budget меню:
+`/stats` и кнопка `🗓️ Planning` открывают это меню (это не “stats-экран”).
+
+### 8.4 Budget меню
 - `📌 Overview`
 - `📉 Budget`
 - `📈 Income`
@@ -147,132 +142,88 @@ Budget меню:
 - `🗂 Archive`
 - `⬅ Back`
 
-Last меню:
+### 8.5 Last operations меню
 - `📅 All this month`
 - `25 operations`
 - `15 operations`
 - `⬅ Back`
 
-## 8.4 Wizard добавления транзакции (`mvp.py`)
-Текущий пользовательский флоу (`expense` и `income`):
-1. ввод суммы,
-2. выбор категории,
-3. автоматическая установка времени `now` (МСК),
-4. комментарий,
-5. подтверждение.
+### 8.6 Флоу добавления транзакции
+Для `expense` и `income`:
+1. сумма;
+2. категория;
+3. дата/время автоматически = `now` по МСК;
+4. комментарий;
+5. confirm.
 
-Особенность для `Bills` в расходах:
-- после даты (автопоставленной) открывается picker bill-названий из `fin.bills` по `month_id`;
-- если bill не найден/не выбран и комментарий пуст — ставится `unexpected bill`.
+Для расхода в категории `Bills`:
+- бот предлагает выбрать bill кнопками из текущего списка `fin.bills`;
+- добавляется fallback-значение `unexpected bill`.
 
-Проверки:
-- корректность суммы,
-- категория существует,
-- возможный дубль,
-- предупреждение про дату в будущем (в текущем флоу почти неактуально, так как дата auto-now).
+### 8.7 Planning setup (bulk)
+Формат ввода: `Name Amount` (также поддержаны `|`, `;`, ` - `, `:`).
 
-Примечание:
-- состояния `waiting_date_choice`/`waiting_custom_date` в коде есть, но в текущем UI-флоу не используются.
-
-## 8.5 Последние операции
-- `/last [N]` (1..50)
-- кнопка `Recent operations` сразу показывает последние 5
-- быстрые кнопки: `All this month`, `25 operations`, `15 operations`
-- формат: `#id`, дата МСК, тип (❌/✅), сумма, категория, comment.
-
-## 8.6 Бюджет
-- `/budget` или кнопка `🧾 Budget` -> общий экран:
-  - таблица расходов (`Planned`, `Diff`),
-  - таблица доходов (`Actual`, `Expected`),
-  - строка `Clean income`,
-  - `I/O balance now/exp` в конце.
-- отдельные команды: `/budget_expense`, `/budget_income`, `/bills`.
-- перед чтением бюджета запускается SQL автокопии `402` для текущего месяца.
-
-## 8.7 Planning (bulk-настройка)
-Точка входа:
-- кнопка `🗓️ Planning` или `/stats`.
-
-Действия:
-- `📝 Bills` -> открывает текущий список bills в формате `Name Amount` для copy/paste-редактирования,
-- `💰 Income` -> открывает текущий income-план в формате `Name Amount`,
-- `💸 Expenses` -> открывает текущий expense-план (без `Bills`) в формате `Name Amount`,
-- `🔄 All` -> запускает последовательный сценарий: `Expenses -> Income -> Bills`.
+Режимы:
+- `📝 Bills`: редактирование списка Bills как текстового шаблона.
+- `💰 Income`: редактирование income-плана.
+- `💸 Expenses`: редактирование expense-плана (без категории `Bills`).
+- `🔄 All`: последовательность `Expenses -> Income -> Bills`.
 
 Поведение:
-- пользователь получает предзаполненный текстовый шаблон,
-- редактирует суммы,
-- отправляет обратно одним сообщением,
-- бот валидирует и сохраняет,
-- planning-действия доступны только в FSM-состоянии меню Planning (исключает конфликт с `💰 Income` на главном экране).
+- бот сначала показывает текущий шаблон;
+- пользователь правит текст и отправляет;
+- бот валидирует и сохраняет.
 
-## 8.8 Bills / Income / Expenses setup
-Общий формат ввода:
-- одна строка = один элемент,
-- формат: `Name Amount` (также поддержаны разделители `|`, `;`, ` - `, `:`),
-- пример:
-  - `Rent 0`
-  - `Utilities 0`
-  - `Internet 0`
-- очистка: `clear`, `wipe`, `-`, `очистить`.
+### 8.8 Budget/Stats/Archive
+- `/budget` (`Overview`) показывает:
+  - таблицу расходного бюджета (`Planned`, `Diff`),
+  - таблицу доходов (`Actual`, `Expected`),
+  - строку `Clean income`,
+  - `I/O balance now/exp`.
+- Быстрые slash-статы: `/today`, `/week`, `/month`, `/year`.
+- Архив открывается из `Budget -> 🗂 Archive`, затем месяц кнопкой.
 
-Правила сохранения:
-- bills: запись через deactivate + upsert,
-- income/expenses: unknown-категории отклоняются с ошибкой,
-- для income/expenses отсутствующие в сообщении категории сохраняются как `0`.
+### 8.9 Backup в Telegram
+`/backup` формирует JSON и отправляет документом:
+- transactions (до 50000 последних),
+- budget active/archive,
+- bills active/archive.
 
-## 8.9 Статистика и архив
-- Быстрая статистика (`today/week/month/year`) доступна slash-командами:
-  - `/today`, `/week`, `/month`, `/year`
-  - в UI-кнопках верхнего уровня не показывается.
-- Обычная статистика выводит:
-  - totals,
-  - топ категорий расходов,
-  - топ-5 отдельных расходных операций,
-  - clean income.
-- Архив:
-  - кнопка `🗂 Archive` из Budget-меню,
-  - выбор месяца,
-  - stats по месяцу,
-  - таблицы Budget/Income/Bills архивного месяца.
-
-## 8.10 Backup команда
-`/backup`:
-- собирает JSON (transactions + budget active/archive + bills active/archive),
-- ограничение: до 50000 последних транзакций,
-- отдает файл документом в Telegram.
-
-## 9) Месячный lifecycle (автоматизация)
+## 9) Автоархивация месяца
 Фоновый цикл в `main.py` каждую минуту:
-1. Находит закрытые месяцы (граница: МСК последний день 23:59).
-2. Архивирует месяц (`403_budget_archive_month.sql`).
-3. Чистит active budget (`404_budget_active_clear_month.sql`).
-4. Чистит active bills (`522_bills_clear_month.sql`).
+1. ищет “закрытые” месяцы по МСК (граница: последний день 23:59);
+2. переносит данные в архив (`403_budget_archive_month.sql`);
+3. чистит `budget_active` (`404_budget_active_clear_month.sql`);
+4. чистит `bills` текущего месяца (`522_bills_clear_month.sql`).
 
-Итог: закрытый месяц фиксируется в archive-таблицах, active-таблицы освобождаются.
-
-## 10) Shell backup (`scripts/create_backup.sh`)
+## 10) Backup и переносимость
+### 10.1 Shell backup (`scripts/create_backup.sh`)
 Делает:
-- `pg_dump -Fc` из контейнера db,
-- `project.tgz` с исключениями (venv, backups, .git, кэши и т.п.),
-- `meta.txt` и `checksums.sha256`,
-- pruning старых backup-директорий по retention.
+- `pg_dump -Fc` из контейнера БД;
+- `project.tgz`;
+- `meta.txt`, `checksums.sha256`;
+- cleanup старых backup-папок по retention.
 
-## 11) Поток запроса (от кнопки до БД)
-1. Router -> handler.
-2. Handler берет SQL-текст из `sql_cache` по пути.
-3. `bind_named_params()` меняет `:name` на `$1..$N`.
-4. `Database` выполняет query через asyncpg.
-5. Handler форматирует ответ и отправляет в Telegram.
+### 10.2 Portable backup
+Проверен сценарий “снять на сервере -> поднять локально” через:
+- archive с образами/volume/dump/source/meta;
+- проверка checksum;
+- восстановление в отдельный compose-проект.
 
-## 12) Текущие ограничения
-- Редактирование/удаление уже созданной транзакции через UI отсутствует (делается SQL-правкой).
-- UX-команды и SQL плотно связаны в одном большом файле `mvp.py` (~1900 строк).
-- В репозитории пока нет зафиксированных коммитов (`git status` показывает весь проект как untracked).
+## 11) Важные ограничения
+- UI-редактирования/удаления конкретной транзакции пока нет (делается SQL-операцией по `id`).
+- `mvp.py` крупный (много бизнес-логики в одном файле).
+- Ветка `main` локально без коммитов (первичная инициализация репозитория еще не выполнена).
+
+## 12) Публикация в Git (текущее состояние)
+- `.gitignore` уже добавлен.
+- В публичный репозиторий нельзя включать `.env`, `backups/`, dump-файлы.
+- Если секреты когда-либо были в истории/архивах, их нужно ротировать (`TG_TOKEN`, DB password).
 
 ## 13) Быстрый онбординг
-1. Прочитать `bot/app/main.py`.
-2. Прочитать `bot/app/handlers/menu.py`.
-3. Прочитать `bot/app/handlers/mvp.py` по блокам: wizard -> budget -> planning -> stats/archive -> backup.
-4. Просмотреть SQL-папки в порядке `20 -> 30 -> 40 -> 50 -> 90`.
-5. Проверить `.env`, `docker-compose.yaml`, `scripts/create_backup.sh`.
+1. `README.md`
+2. `bot/app/main.py`
+3. `bot/app/handlers/menu.py`
+4. `bot/app/handlers/mvp.py`
+5. `queries/20 -> 30 -> 40 -> 50 -> 90`
+6. `docker-compose.yaml`, `scripts/create_backup.sh`
