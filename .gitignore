@@ -1,0 +1,31 @@
+.DS_Store
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local environments
+Fin_tracker.venv/
+.venv/
+venv/
+
+# Python cache/build
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Backups and dumps
+backups/
+*.dump
+*.sqlitedb
+
+# Logs
+*.log
+
